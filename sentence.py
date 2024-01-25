@@ -1,4 +1,5 @@
 import spacy
+from sentence_transformers import SentenceTransformer, util
 
 nlp = spacy.load('en_core_web_md')
 
@@ -11,3 +12,5 @@ def SentenceSimilarityScore(sentence1, sentence2):
 
     similarity_score = doc1.similarity(doc2)
     return similarity_score
+
+
