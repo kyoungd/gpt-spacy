@@ -1,7 +1,8 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, abort
 from flask_cors import CORS
 from sentence import SentenceSimilarityScore
 from fuzzywuzzy import fuzz, process
+from pre_text_normalization import text_normalization_with_boundaries, text_remove_stop_words_lemmanized
 
 app = Flask(__name__)
 CORS(app)  # This will enable CORS for all routes
@@ -42,6 +43,29 @@ def address_match():
 
     best_match = process.extractOne(sentence1, available_addresses)
     return jsonify({'best_match': best_match[0], 'score': best_match[1]})
+
+@app.route('/text-clean', methods=['POST'])
+def text_clean():
+    try:
+        data = request.get_json()
+        text = data.get('text_block')
+        text_block = text_normalization_with_boundaries(text)
+        return jsonify({'text': text_block})
+    except Exception as e:
+        print(f"Error deleting data: {e}")
+        abort(str(e), 501)
+
+@app.route('/text-normalize', methods=['POST'])
+def text_normalize():
+    try:
+        data = request.get_json()
+        text = data.get('text_block')
+        text_block = text_remove_stop_words_lemmanized(text)
+        return jsonify({'text': text_block})
+    except Exception as e:
+        print(f"Error deleting data: {e}")
+        abort(str(e), 501)
+
 
 @app.route("/ping", methods=["GET"])
 def ping():
