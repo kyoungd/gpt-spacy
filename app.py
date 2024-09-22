@@ -3,6 +3,9 @@ from flask_cors import CORS
 from sentence import SentenceSimilarityScore
 from fuzzywuzzy import fuzz, process
 from pre_text_normalization import text_normalization_with_boundaries, text_remove_stop_words_lemmanized
+from ai import CoreferenceResolution
+from chunking.ichunker import IChunker
+from chunking.chunker import get_chunker
 
 app = Flask(__name__)
 CORS(app)  # This will enable CORS for all routes
@@ -52,7 +55,7 @@ def text_clean():
         text_block = text_normalization_with_boundaries(text)
         return jsonify({'text': text_block})
     except Exception as e:
-        print(f"Error deleting data: {e}")
+        print(f"Error text_clean: {e}")
         abort(str(e), 501)
 
 @app.route('/text-normalize', methods=['POST'])
@@ -63,9 +66,34 @@ def text_normalize():
         text_block = text_remove_stop_words_lemmanized(text)
         return jsonify({'text': text_block})
     except Exception as e:
-        print(f"Error deleting data: {e}")
+        print(f"Error text_normalize: {e}")
+        abort(str(e), 501)    
+
+@app.route('/remove-pronouns', methods=['POST'])
+def remove_pronouns():
+    try:
+        # Parse the request body as JSON
+        block = request.get_json()
+        text_block = block['text_block']
+        error, data = CoreferenceResolution.run(text_block)
+        if error:
+            abort(str(error), 501)
+        return jsonify( {"text": data.clean_text} )
+    except Exception as e:
+        print(request.get_json())
         abort(str(e), 501)
 
+@app.route('/chunking', methods=['POST'])
+def chunking():
+    try:
+        # Parse the request body as JSON
+        incoming_json_body = request.get_json()
+        text = incoming_json_body['text_block']
+        chunker: IChunker = get_chunker(text)
+        chunks = chunker.chunk_text(text)
+        return jsonify({ "data" : chunks} ), 200
+    except Exception as e:
+        abort(str(e), 501)
 
 @app.route("/ping", methods=["GET"])
 def ping():
