@@ -2,10 +2,13 @@ from flask import Flask, request, jsonify, abort
 from flask_cors import CORS
 from sentence import SentenceSimilarityScore
 from fuzzywuzzy import fuzz, process
-from pre_text_normalization import text_normalization_with_boundaries, text_remove_stop_words_lemmanized
+from rq import Queue
+from redis import Redis
+from pre_text_normalization import text_normalization_with_boundaries, text_remove_stop_words_lemmatized
 from ai import CoreferenceResolution
 from chunking.ichunker import IChunker
 from chunking.chunker import get_chunker
+from text_processing import PreprocessTextForRAG
 
 app = Flask(__name__)
 CORS(app)  # This will enable CORS for all routes
@@ -63,7 +66,7 @@ def text_normalize():
     try:
         data = request.get_json()
         text = data.get('text_block')
-        text_block = text_remove_stop_words_lemmanized(text)
+        text_block = text_remove_stop_words_lemmatized(text)
         return jsonify({'text': text_block})
     except Exception as e:
         print(f"Error text_normalize: {e}")
@@ -83,15 +86,24 @@ def remove_pronouns():
         print(request.get_json())
         abort(str(e), 501)
 
+
+redis_conn = Redis(host='localhost', port=6379, db=0)
+# Create a queue instance
+q_chunking = Queue("chunking", connection=redis_conn)
+
 @app.route('/chunking', methods=['POST'])
 def chunking():
     try:
         # Parse the request body as JSON
         incoming_json_body = request.get_json()
         text = incoming_json_body['text_block']
-        chunker: IChunker = get_chunker(text)
-        chunks = chunker.chunk_text(text)
-        return jsonify({ "data" : chunks} ), 200
+        wp_action_id = incoming_json_body['wp_action_id']
+        # chunker: IChunker = get_chunker(text)
+        # chunks = chunker.chunk_text(text)
+        chunker = PreprocessTextForRAG()
+        job = q_chunking.enqueue(chunker.run, text, wp_action_id)
+        print(f"Task queued: {job.id}")
+        return jsonify({ "job_id" : job.id} ), 200
     except Exception as e:
         abort(str(e), 501)
 

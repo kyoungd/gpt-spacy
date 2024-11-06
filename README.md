@@ -134,3 +134,8 @@ pip install tiktoken
 
 
 
+sudo apt update
+sudo apt install redis-server
+
+pip install rq
+rq worker

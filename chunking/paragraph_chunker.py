@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.dirname(sys.path[0]))
 
 from chunking.ichunker import IChunker
 from chunking.semantic_chunker import SemanticChunker
-from pre_text_normalization import text_normalization_with_boundaries, text_remove_stop_words_lemmanized
+from pre_text_normalization import text_normalization_with_boundaries, text_remove_stop_words_lemmatized
 from ai import CoreferenceResolution
 from coreference import coreference_resolution
 
@@ -54,7 +54,7 @@ class ParagraphChunker(IChunker):
 
     def chunk_text(self, text):
         text_normalized = text_normalization_with_boundaries(text)
-        text_clean = text_remove_stop_words_lemmanized(text_normalized)
+        text_clean = text_remove_stop_words_lemmatized(text_normalized)
         # text_block = coreference_resolution(text_clean)
         error, text_block = CoreferenceResolution.run(text_clean)
         if error:

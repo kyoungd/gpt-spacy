@@ -1,56 +1,110 @@
-from ai import ProductInfo, ProductChunkInfo, Chunking, ChunkComparisonWithOriginalText
-from pre_text_normalization import text_normalization_with_boundaries, text_remove_stop_words_lemmatized
+import asyncio
+import time
+import json
+import os
+from datetime import datetime
+from ai import ChunkComparisonWithOriginalText
+from call_ai import ProductInfo, ProductChunkInfo, Chunking
+from pre_text_normalization import text_normalization_with_boundaries, text_remove_stop_words_lemmatized, ner_and_pos_tagging
+from util import http_put
+from dotenv import load_dotenv
 
-def rag_pipeline_processing(product_info):
-    try:
-        # Process the entire product
-        error, product_result = ProductInfo.run(product_info)
+load_dotenv()
+
+class PreprocessTextForRAG:
+
+    def __init__(self):
+        self.global_chunks = []
+
+    def init_chunking(self, final_text, ner_and_pos):
+        error, chunking_result = Chunking.run(final_text, ner_and_pos)
         if error:
-            return {"error": f"Error processing product: {error}"}
-        
-        total_text = product_info + "\n\n" + product_result.additional_info
-        # Use Chunking class to chunk the product description
-        error, chunking_result = Chunking.run(total_text)
-        if error:
-            return {"error": f"Error chunking product description: {error}"}
-        
-        # Process all chunks at once
-        error, chunk_process_results = ProductChunkInfo.run(chunking_result.chunks)
-        if error:
-            return {"error": f"Error processing chunks: {error}"}
-        
-        # Aggregate tags, key features, and Q&As
-        all_tags = set(product_result.tags)
-        all_key_features = set(product_result.key_features)
-        all_generated_questions_answers = product_result.generated_questions_answers.copy()
+            print(f"Error processing chunking: {error}")
+            return self.global_chunks
+        # Process individual global_chunks
+        for chunk in chunking_result.chunks:
+            self.global_chunks.append(chunk)
 
-        for tas in chunk_process_results.tags:
-            all_tags.update(tas)
-        for kfs in chunk_process_results.key_features:
-            all_key_features.update(kfs)
-        for qas in chunk_process_results.generated_questions_answers:
-            all_generated_questions_answers.extend(qas)
+    def init_qa_chunks(self, qa_chunks):
+        for chunk in qa_chunks:
+            self.global_chunks.append(chunk)
 
-        # Remove duplicates from all_generated_questions_answers while preserving order
-        all_generated_questions_answers = list(dict.fromkeys(all_generated_questions_answers))
+    async def run_chunking(self):
+        all_chunks = []
+        tasks = []
+        for i, chunk in enumerate(self.global_chunks, 1):
+            tasks.append(ProductChunkInfo.run(chunk))
 
-        # Create a chunks list that combines all chunks and all_generated_questions_answers
-        chunks = chunking_result.chunks + all_generated_questions_answers
+        # Run all tasks concurrently and wait until they are all complete
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Return the required data
-        return {
-            "all_tags": list(all_tags),
-            "all_key_features": list(all_key_features),
-            "chunks": chunks
-        }
-    
-    except Exception as e:
-        return {
-            "all_tags": [],
-            "all_key_features": [],
-            "chunks": [product_info],
-            "error": f"An error occurred: {str(e)}"
-        }
+        for i, result in enumerate(results, 1):
+            if isinstance(result, Exception):
+                print(f"Error processing chunk {i}: {result}")
+                continue
+            error, chunk_result = result
+            if error:
+                print(f"Error processing chunk {i}: {error}")
+                continue
+            new_chunk = {
+                "type": "content",
+                "chunk_text": chunk_result.text_chunk + ' '.join(chunk_result.generated_questions_answers),
+                "tags": chunk_result.tags,
+                "key_features": chunk_result.key_features,
+                "ner": chunk_result.ner,
+            }
+            all_chunks.append(new_chunk)
+        return all_chunks
+
+    def run(self, text_block, wp_action_id):
+        try:
+            text1 = text_normalization_with_boundaries(text_block)
+            text2 = text_remove_stop_words_lemmatized(text1)
+            ner_and_pos = ner_and_pos_tagging(text2)
+            
+            # Process the entire product
+            error, product_result = ProductInfo.run(text2)
+            if error:
+                return {
+                    "error": f"Error processing product: {error}",
+                    "chunks": [],
+                }
+
+            # Create summary chunk
+            summary_chunk = {
+                "type": "summary",
+                "chunk_text": product_result.summary,
+                "tags": product_result.tags,
+                "key_features": product_result.key_features,
+                "ner": ner_and_pos['ner']
+            }
+
+            # Process original text
+            self.init_chunking(text2, ner_and_pos)
+
+            # Process additional info
+            text_ai1 = text_normalization_with_boundaries(product_result.additional_info)
+            text_ai2 = text_remove_stop_words_lemmatized(text_ai1)
+            self.init_chunking(text_ai2, ner_and_pos)
+
+            # Process Q&As as separate chunks
+            self.init_qa_chunks(product_result.generated_questions_answers)
+
+            final_chunks = asyncio.run(self.run_chunking())
+
+            # Combine all chunks
+            chunks = [summary_chunk] + final_chunks
+
+            url = f"{os.getenv('BASE_URL_ADMIN')}/api/wp-actions/{wp_action_id}"
+            http_put(url, chunks)
+            return { "chunks": chunks }
+
+        except Exception as e:
+            print(f"Error in rag_pipeline_processing: {e}")
+            return {
+                "error": f"Error in rag_pipeline_processing: {e}",
+                "chunks": []
+            }
 
 if __name__ == '__main__':
     product_info = """
@@ -88,20 +142,37 @@ Grey: A subtle and neutral shade that pairs well with a variety of outfits.
 Olive Green: For those who want a rugged, outdoorsy feel with a splash of color.
 Perfect for All Winter Activities: Whether you’re heading to work, running errands, or embarking on a winter hike, this jacket provides the right balance of warmth, protection, and style. The durable construction ensures long-lasting use, while the modern design keeps you looking sharp no matter where the day takes you.
 """
-    
-    result = rag_pipeline_processing(product_info)
+    start_time = time.time()
+    # Process the entire product
+    process_text = PreprocessTextForRAG()
+    result = process_text.run(product_info)
     if "error" in result:
         print(result["error"])
     else:
-        print("\nAll Unique Tags:", result['all_tags'])
-        print("All Unique Key Features:", result['all_key_features'])
         print("Combined Chunks and Q&As:", result['chunks'])
 
+        print('chunk size: ', len(result['chunks']))
         # Compare original text with chunks
         error, comparison_result = ChunkComparisonWithOriginalText.run(product_info, result['chunks'])
         if error:
             print(f"Error comparing original text with chunks: {error}")
         else:
             print(f"\nSimilarity Score: {comparison_result.similarity_score}")
-            print(f"Difference Text: {comparison_result.difference_text}")
-            print(f"Difference Details: {comparison_result.difference_details}")
+
+    # Stop the timer
+    end_time = time.time()
+    
+    # Calculate the elapsed time in seconds
+    elapsed_time = end_time - start_time
+    # Print the elapsed time in seconds with 1/10 second accuracy
+    print(f"\nTime taken: {elapsed_time:.1f} seconds")
+
+    # Generate a filename with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"product_processing_result_{timestamp}.json"
+
+    # Save result to JSON file
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(result, f, ensure_ascii=False, indent=4)
+
+    print(f"Results saved to {filename}")
